@@ -210,6 +210,12 @@ impl TranscriptionManager {
     }
 
     pub fn load_model(&self, model_id: &str) -> Result<()> {
+        // Skip loading local models when cloud STT is active
+        if get_settings(&self.app_handle).cloud_stt_enabled {
+            debug!("Cloud STT enabled — skipping local model load");
+            return Ok(());
+        }
+
         let load_start = std::time::Instant::now();
         debug!("Starting to load model: {}", model_id);
 
@@ -400,6 +406,10 @@ impl TranscriptionManager {
 
     /// Kicks off the model loading in a background thread if it's not already loaded
     pub fn initiate_model_load(&self) {
+        if get_settings(&self.app_handle).cloud_stt_enabled {
+            return;
+        }
+
         let mut is_loading = self.is_loading.lock().unwrap();
         if *is_loading || self.is_model_loaded() {
             return;

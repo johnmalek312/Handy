@@ -309,7 +309,17 @@ async fn maybe_convert_chinese_variant(
 }
 
 impl ShortcutAction for TranscribeAction {
-    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+    fn start(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str) {
+        // Check if cloud STT is enabled — delegate to cloud action
+        let settings = get_settings(app);
+        if settings.cloud_stt_enabled {
+            let cloud_action = CloudTranscribeAction {
+                post_process: self.post_process,
+            };
+            cloud_action.start(app, binding_id, shortcut_str);
+            return;
+        }
+
         let start_time = Instant::now();
         debug!("TranscribeAction::start called for binding: {}", binding_id);
 
@@ -391,7 +401,17 @@ impl ShortcutAction for TranscribeAction {
         );
     }
 
-    fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+    fn stop(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str) {
+        // Check if cloud STT is enabled — delegate to cloud action
+        let settings = get_settings(app);
+        if settings.cloud_stt_enabled {
+            let cloud_action = CloudTranscribeAction {
+                post_process: self.post_process,
+            };
+            cloud_action.stop(app, binding_id, shortcut_str);
+            return;
+        }
+
         // Unregister the cancel shortcut when transcription stops
         shortcut::unregister_cancel_shortcut(app);
 
@@ -541,6 +561,201 @@ impl ShortcutAction for TranscribeAction {
             "TranscribeAction::stop completed in {:?}",
             stop_time.elapsed()
         );
+    }
+}
+
+// Cloud STT Transcribe Action
+// When cloud_stt_enabled is true, the TranscribeAction routes through this.
+struct CloudTranscribeAction {
+    post_process: bool,
+}
+
+impl ShortcutAction for CloudTranscribeAction {
+    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+        debug!(
+            "CloudTranscribeAction::start called for binding: {}",
+            binding_id
+        );
+
+        change_tray_icon(app, TrayIconState::Recording);
+        show_recording_overlay(app);
+
+        let rm = app.state::<Arc<AudioRecordingManager>>();
+        let settings = get_settings(app);
+        let is_always_on = settings.always_on_microphone;
+
+        let binding_id = binding_id.to_string();
+        let mut recording_error: Option<String> = None;
+
+        // Start cloud STT session
+        let language = settings.cloud_stt_language.clone();
+        if let Err(e) = crate::commands::claude::start_cloud_stt_internal(app, Some(language)) {
+            error!("Failed to start cloud STT: {}", e);
+            recording_error = Some(e);
+        }
+
+        if recording_error.is_none() {
+            if is_always_on {
+                let rm_clone = Arc::clone(&rm);
+                let app_clone = app.clone();
+                std::thread::spawn(move || {
+                    play_feedback_sound_blocking(&app_clone, SoundType::Start);
+                    rm_clone.apply_mute();
+                });
+
+                if let Err(e) = rm.try_start_recording(&binding_id) {
+                    recording_error = Some(e);
+                }
+            } else {
+                match rm.try_start_recording(&binding_id) {
+                    Ok(()) => {
+                        let app_clone = app.clone();
+                        let rm_clone = Arc::clone(&rm);
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            play_feedback_sound_blocking(&app_clone, SoundType::Start);
+                            rm_clone.apply_mute();
+                        });
+                    }
+                    Err(e) => {
+                        recording_error = Some(e);
+                    }
+                }
+            }
+        }
+
+        if recording_error.is_none() {
+            shortcut::register_cancel_shortcut(app);
+
+            // Set up the data callback to stream resampled audio to cloud STT
+            let app_for_data = app.clone();
+            rm.set_data_callback(Some(std::sync::Arc::new(move |samples: &[f32]| {
+                crate::commands::claude::send_cloud_stt_f32_samples(&app_for_data, samples);
+            })));
+        } else {
+            utils::hide_recording_overlay(app);
+            change_tray_icon(app, TrayIconState::Idle);
+            if let Some(err) = recording_error {
+                let _ = app.emit("recording-error", err);
+            }
+        }
+    }
+
+    fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+        shortcut::unregister_cancel_shortcut(app);
+
+        let ah = app.clone();
+        let rm = Arc::clone(&app.state::<Arc<AudioRecordingManager>>());
+        let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
+
+        // Clear the data callback before stopping recording
+        rm.set_data_callback(None);
+
+        change_tray_icon(app, TrayIconState::Transcribing);
+        show_transcribing_overlay(app);
+
+        rm.remove_mute();
+        play_feedback_sound(app, SoundType::Stop);
+
+        let binding_id = binding_id.to_string();
+        let post_process = self.post_process;
+
+        tauri::async_runtime::spawn(async move {
+            let _guard = FinishGuard(ah.clone());
+
+            // Stop recording and get samples (for history)
+            let samples = rm.stop_recording(&binding_id);
+
+            // Stop cloud STT and get the accumulated transcript
+            let transcript = match crate::commands::claude::stop_cloud_stt(ah.clone()).await {
+                Ok(t) => t,
+                Err(e) => {
+                    error!("Failed to stop cloud STT: {}", e);
+                    String::new()
+                }
+            };
+
+            if !transcript.is_empty() {
+                let settings = get_settings(&ah);
+                let mut final_text = transcript.clone();
+                let mut post_processed_text: Option<String> = None;
+                let mut post_process_prompt: Option<String> = None;
+
+                // Chinese variant conversion
+                if let Some(converted) =
+                    maybe_convert_chinese_variant(&settings, &transcript).await
+                {
+                    final_text = converted;
+                }
+
+                // LLM post-processing
+                if post_process {
+                    show_processing_overlay(&ah);
+                }
+                let processed = if post_process {
+                    post_process_transcription(&settings, &final_text).await
+                } else {
+                    None
+                };
+                if let Some(processed_text) = processed {
+                    post_processed_text = Some(processed_text.clone());
+                    final_text = processed_text;
+
+                    if let Some(prompt_id) = &settings.post_process_selected_prompt_id {
+                        if let Some(prompt) = settings
+                            .post_process_prompts
+                            .iter()
+                            .find(|p| &p.id == prompt_id)
+                        {
+                            post_process_prompt = Some(prompt.prompt.clone());
+                        }
+                    }
+                } else if final_text != transcript {
+                    post_processed_text = Some(final_text.clone());
+                }
+
+                // Save to history
+                if let Some(samples) = samples {
+                    let hm_clone = Arc::clone(&hm);
+                    let transcription_for_history = transcript.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = hm_clone
+                            .save_transcription(
+                                samples,
+                                transcription_for_history,
+                                post_processed_text,
+                                post_process_prompt,
+                            )
+                            .await
+                        {
+                            error!("Failed to save transcription to history: {}", e);
+                        }
+                    });
+                }
+
+                // Paste the final text
+                let ah_clone = ah.clone();
+                let paste_time = Instant::now();
+                ah.run_on_main_thread(move || {
+                    match utils::paste(final_text, ah_clone.clone()) {
+                        Ok(()) => {
+                            debug!("Text pasted successfully in {:?}", paste_time.elapsed())
+                        }
+                        Err(e) => error!("Failed to paste transcription: {}", e),
+                    }
+                    utils::hide_recording_overlay(&ah_clone);
+                    change_tray_icon(&ah_clone, TrayIconState::Idle);
+                })
+                .unwrap_or_else(|e| {
+                    error!("Failed to run paste on main thread: {:?}", e);
+                    utils::hide_recording_overlay(&ah);
+                    change_tray_icon(&ah, TrayIconState::Idle);
+                });
+            } else {
+                utils::hide_recording_overlay(&ah);
+                change_tray_icon(&ah, TrayIconState::Idle);
+            }
+        });
     }
 }
 

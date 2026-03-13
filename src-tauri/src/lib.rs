@@ -4,6 +4,8 @@ mod apple_intelligence;
 mod audio_feedback;
 pub mod audio_toolkit;
 pub mod cli;
+mod claude_auth;
+mod claude_stt;
 mod clipboard;
 mod commands;
 mod helpers;
@@ -129,6 +131,14 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(model_manager.clone());
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
+
+    // Initialize Claude.ai auth and cloud STT state
+    let claude_auth_manager =
+        Arc::new(claude_auth::ClaudeAuthManager::new(app_handle));
+    app_handle.manage(claude_auth_manager);
+    app_handle.manage(commands::claude::CloudSttSessionState(
+        std::sync::Mutex::new(None),
+    ));
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
@@ -350,6 +360,16 @@ pub fn run(cli_args: CliArgs) {
         commands::history::delete_history_entry,
         commands::history::update_history_limit,
         commands::history::update_recording_retention_period,
+        commands::claude::get_claude_auth_state,
+        commands::claude::set_claude_access_token,
+        commands::claude::claude_logout,
+        commands::claude::start_cloud_stt,
+        commands::claude::stop_cloud_stt,
+        commands::claude::send_cloud_stt_audio,
+        commands::claude::is_cloud_stt_connected,
+        commands::claude::change_cloud_stt_enabled,
+        commands::claude::change_cloud_stt_language,
+        commands::claude::import_claude_code_credentials,
         helpers::clamshell::is_laptop,
     ]);
 

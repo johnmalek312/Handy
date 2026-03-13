@@ -362,6 +362,12 @@ pub struct AppSettings {
     pub external_script_path: Option<String>,
     #[serde(default)]
     pub custom_filler_words: Option<Vec<String>>,
+    /// When true, use Claude.ai cloud STT instead of local models.
+    #[serde(default)]
+    pub cloud_stt_enabled: bool,
+    /// Language for cloud STT (e.g. "en", "fr", "es").
+    #[serde(default = "default_cloud_stt_language")]
+    pub cloud_stt_language: String,
 }
 
 fn default_model() -> String {
@@ -572,6 +578,10 @@ fn default_typing_tool() -> TypingTool {
     TypingTool::Auto
 }
 
+fn default_cloud_stt_language() -> String {
+    "en".to_string()
+}
+
 fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
     let mut changed = false;
     for provider in default_post_process_providers() {
@@ -727,6 +737,8 @@ pub fn get_default_settings() -> AppSettings {
         typing_tool: default_typing_tool(),
         external_script_path: None,
         custom_filler_words: None,
+        cloud_stt_enabled: false,
+        cloud_stt_language: default_cloud_stt_language(),
     }
 }
 

@@ -28,6 +28,10 @@ pub struct AudioRecorder {
     worker_handle: Option<std::thread::JoinHandle<()>>,
     vad: Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
     level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
+    /// Optional callback that receives resampled 16kHz mono f32 samples in real-time.
+    /// Used for streaming audio to cloud STT (converted to 16-bit LE before sending).
+    /// Wrapped in Arc<Mutex<>> so it can be updated at runtime after open().
+    data_cb: Arc<Mutex<Option<Arc<dyn Fn(&[f32]) + Send + Sync + 'static>>>>,
 }
 
 impl AudioRecorder {
@@ -38,6 +42,7 @@ impl AudioRecorder {
             worker_handle: None,
             vad: None,
             level_cb: None,
+            data_cb: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -52,6 +57,22 @@ impl AudioRecorder {
     {
         self.level_cb = Some(Arc::new(cb));
         self
+    }
+
+    /// Set a callback that receives resampled 16kHz mono f32 audio samples in real-time
+    /// during recording. This is used for streaming to cloud STT services.
+    pub fn with_data_callback<F>(self, cb: F) -> Self
+    where
+        F: Fn(&[f32]) + Send + Sync + 'static,
+    {
+        *self.data_cb.lock().unwrap() = Some(Arc::new(cb));
+        self
+    }
+
+    /// Set/clear the data callback at runtime (after construction).
+    /// This works even after open() because the worker thread shares the same Arc<Mutex<>>.
+    pub fn set_data_callback(&self, cb: Option<Arc<dyn Fn(&[f32]) + Send + Sync + 'static>>) {
+        *self.data_cb.lock().unwrap() = cb;
     }
 
     pub fn open(&mut self, device: Option<Device>) -> Result<(), Box<dyn std::error::Error>> {
@@ -75,6 +96,7 @@ impl AudioRecorder {
         let vad = self.vad.clone();
         // Move the optional level callback into the worker thread
         let level_cb = self.level_cb.clone();
+        let data_cb = self.data_cb.clone();
 
         let worker = std::thread::spawn(move || {
             let init_result = (|| -> Result<(cpal::Stream, u32), String> {
@@ -144,7 +166,7 @@ impl AudioRecorder {
                 Ok((stream, sample_rate)) => {
                     let _ = init_tx.send(Ok(()));
                     // Keep the stream alive while we process samples.
-                    run_consumer(sample_rate, vad, sample_rx, cmd_rx, level_cb);
+                    run_consumer(sample_rate, vad, sample_rx, cmd_rx, level_cb, data_cb);
                     drop(stream);
                 }
                 Err(error_message) => {
@@ -313,6 +335,7 @@ fn run_consumer(
     sample_rx: mpsc::Receiver<Vec<f32>>,
     cmd_rx: mpsc::Receiver<Cmd>,
     level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
+    data_cb: Arc<Mutex<Option<Arc<dyn Fn(&[f32]) + Send + Sync + 'static>>>>,
 ) {
     let mut frame_resampler = FrameResampler::new(
         in_sample_rate as usize,
@@ -370,7 +393,13 @@ fn run_consumer(
 
         // ---------- existing pipeline ------------------------------------ //
         frame_resampler.push(&raw, &mut |frame: &[f32]| {
-            handle_frame(frame, recording, &vad, &mut processed_samples)
+            handle_frame(frame, recording, &vad, &mut processed_samples);
+            // Stream resampled audio to cloud STT callback
+            if recording {
+                if let Some(cb) = data_cb.lock().unwrap().as_ref().cloned() {
+                    cb(frame);
+                }
+            }
         });
 
         // non-blocking check for a command

@@ -135,6 +135,10 @@ const settingUpdaters: {
     commands.changeExperimentalEnabledSetting(value as boolean),
   show_tray_icon: (value) =>
     commands.changeShowTrayIconSetting(value as boolean),
+  cloud_stt_enabled: (value) =>
+    commands.changeCloudSttEnabled(value as boolean),
+  cloud_stt_language: (value) =>
+    commands.changeCloudSttLanguage(value as string),
 };
 
 export const useSettingsStore = create<SettingsStore>()(
