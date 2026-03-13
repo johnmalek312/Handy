@@ -13,7 +13,7 @@ import { useSettings } from "@/hooks/useSettings";
 import { SettingsGroup } from "@/components/ui/SettingsGroup";
 import { ToggleSwitch } from "@/components/ui/ToggleSwitch";
 import { commands, ClaudeAuthState, CodexAuthState } from "@/bindings";
-import { LANGUAGES } from "@/lib/constants/languages";
+import { LANGUAGES, CLAUDE_VOICE_LANGUAGES } from "@/lib/constants/languages";
 
 type CloudProvider = "claude" | "codex";
 
@@ -47,7 +47,9 @@ export function CloudSttSettings() {
 
   // Codex auth
   const [codexAuth, setCodexAuth] = useState<CodexAuthState | null>(null);
+  const [codexTokenInput, setCodexTokenInput] = useState("");
   const [codexLoading, setCodexLoading] = useState(false);
+  const [codexShowManual, setCodexShowManual] = useState(false);
   const [codexImportError, setCodexImportError] = useState<string | null>(null);
 
   // Language dropdown
@@ -86,13 +88,21 @@ export function CloudSttSettings() {
     }
   }, [langDropdownOpen]);
 
+  const providerLanguages = useMemo(() => {
+    return LANGUAGES.filter((lang) => {
+      if (lang.value === "auto") return false;
+      if (selectedProvider === "claude") {
+        return CLAUDE_VOICE_LANGUAGES.has(lang.value);
+      }
+      return true; // Codex (Whisper) supports all languages
+    });
+  }, [selectedProvider]);
+
   const filteredLanguages = useMemo(() => {
-    return LANGUAGES.filter(
-      (lang) =>
-        lang.value !== "auto" &&
-        lang.label.toLowerCase().includes(langSearch.toLowerCase()),
+    return providerLanguages.filter((lang) =>
+      lang.label.toLowerCase().includes(langSearch.toLowerCase()),
     );
-  }, [langSearch]);
+  }, [providerLanguages, langSearch]);
 
   const selectedLanguageLabel = useMemo(() => {
     if (selectedLanguage === "auto") return "Auto Detect";
@@ -101,6 +111,18 @@ export function CloudSttSettings() {
       selectedLanguage
     );
   }, [selectedLanguage]);
+
+  // Reset language when switching providers if current selection is unsupported
+  useEffect(() => {
+    if (selectedProvider === "claude") {
+      if (
+        selectedLanguage === "auto" ||
+        !CLAUDE_VOICE_LANGUAGES.has(selectedLanguage)
+      ) {
+        updateSetting("cloud_stt_language", "en");
+      }
+    }
+  }, [selectedProvider]);
 
   const loadAuthStates = async () => {
     const claude = await commands.getClaudeAuthState();
@@ -153,6 +175,20 @@ export function CloudSttSettings() {
       await loadAuthStates();
     } else {
       setCodexImportError(result.error);
+    }
+    setCodexLoading(false);
+  };
+
+  const handleCodexManualLogin = async () => {
+    if (!codexTokenInput.trim()) return;
+    setCodexLoading(true);
+    try {
+      await commands.setCodexAccessToken(codexTokenInput.trim());
+      await loadAuthStates();
+      setCodexTokenInput("");
+      setCodexShowManual(false);
+    } catch (e) {
+      console.error("Failed to set Codex token:", e);
     }
     setCodexLoading(false);
   };
@@ -238,8 +274,8 @@ export function CloudSttSettings() {
                     {t(
                       provider.description,
                       provider.id === "claude"
-                        ? "Streaming via Claude.ai voice pipeline"
-                        : "Batch via ChatGPT Whisper endpoint",
+                        ? "Uses Claude.ai's Deepgram Nova STT"
+                        : "Uses ChatGPT's Whisper model",
                     )}
                   </p>
                 </button>
@@ -403,7 +439,7 @@ export function CloudSttSettings() {
                   )}
                   {t(
                     "settings.cloudStt.importFromCodex",
-                    "Import from ~/.codex/auth.json",
+                    "Import from Codex Desktop",
                   )}
                 </button>
 
@@ -411,12 +447,49 @@ export function CloudSttSettings() {
                   <p className="text-xs text-red-400">{codexImportError}</p>
                 )}
 
-                <p className="text-xs text-mid-gray">
+                <button
+                  onClick={() => setCodexShowManual(!codexShowManual)}
+                  className="flex items-center gap-1 text-xs text-mid-gray hover:text-white transition-colors self-start"
+                >
+                  <KeyRound className="w-3 h-3" />
                   {t(
-                    "settings.cloudStt.codexInstructions",
-                    "Codex Desktop stores credentials in ~/.codex/auth.json. Log in via Codex Desktop first, then import.",
+                    "settings.cloudStt.manualToken",
+                    "Enter token manually",
                   )}
-                </p>
+                </button>
+
+                {codexShowManual && (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs text-mid-gray">
+                      {t(
+                        "settings.cloudStt.codexTokenInstructions",
+                        "Paste a ChatGPT access token (eyJhbG...). Get it from Codex Desktop's ~/.codex/auth.json or browser DevTools.",
+                      )}
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={codexTokenInput}
+                        onChange={(e) => setCodexTokenInput(e.target.value)}
+                        placeholder={t(
+                          "settings.cloudStt.tokenPlaceholder",
+                          "Paste token here...",
+                        )}
+                        className="flex-1 px-3 py-1.5 text-sm rounded-md border border-mid-gray/30 bg-transparent focus:outline-none focus:border-logo-primary"
+                        onKeyDown={(e) =>
+                          e.key === "Enter" && handleCodexManualLogin()
+                        }
+                      />
+                      <button
+                        onClick={handleCodexManualLogin}
+                        disabled={codexLoading || !codexTokenInput.trim()}
+                        className="px-4 py-1.5 text-sm rounded-md bg-logo-primary hover:bg-logo-primary/80 disabled:opacity-50 transition-colors"
+                      >
+                        {t("common.save", "Save")}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -485,21 +558,23 @@ export function CloudSttSettings() {
                     />
                   </div>
                   <div className="max-h-48 overflow-y-auto">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        updateSetting("cloud_stt_language", "auto");
-                        setLangDropdownOpen(false);
-                        setLangSearch("");
-                      }}
-                      className={`w-full px-3 py-1.5 text-sm text-left transition-colors ${
-                        selectedLanguage === "auto"
-                          ? "bg-logo-primary/20 text-logo-primary font-semibold"
-                          : "hover:bg-mid-gray/10"
-                      }`}
-                    >
-                      {t("settings.cloudStt.autoDetect", "Auto Detect")}
-                    </button>
+                    {selectedProvider === "codex" && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateSetting("cloud_stt_language", "auto");
+                          setLangDropdownOpen(false);
+                          setLangSearch("");
+                        }}
+                        className={`w-full px-3 py-1.5 text-sm text-left transition-colors ${
+                          selectedLanguage === "auto"
+                            ? "bg-logo-primary/20 text-logo-primary font-semibold"
+                            : "hover:bg-mid-gray/10"
+                        }`}
+                      >
+                        {t("settings.cloudStt.autoDetect", "Auto Detect")}
+                      </button>
+                    )}
                     {filteredLanguages.map((lang) => (
                       <button
                         key={lang.value}

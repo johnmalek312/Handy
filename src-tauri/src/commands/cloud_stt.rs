@@ -76,6 +76,14 @@ pub fn get_codex_auth_state(app: AppHandle) -> Result<CodexAuthState, String> {
 
 #[tauri::command]
 #[specta::specta]
+pub fn set_codex_access_token(app: AppHandle, token: String) -> Result<(), String> {
+    let manager = app.state::<Arc<CodexAuthManager>>();
+    manager.set_access_token(token);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn import_codex_credentials(app: AppHandle) -> Result<(), String> {
     let manager = app.state::<Arc<CodexAuthManager>>();
     if manager.reload_from_file() {

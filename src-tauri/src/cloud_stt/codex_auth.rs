@@ -72,10 +72,14 @@ struct RefreshResponse {
     refresh_token: Option<String>,
 }
 
-fn auth_file_path() -> Option<PathBuf> {
+fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(|h| PathBuf::from(h).join(".codex").join("auth.json"))
+        .map(PathBuf::from)
+}
+
+fn auth_file_path() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".codex").join("auth.json"))
 }
 
 /// Decode the payload of a JWT (no signature verification).
@@ -256,6 +260,15 @@ impl CodexAuthManager {
 
     pub fn is_logged_in(&self) -> bool {
         self.state.lock().unwrap().access_token.is_some()
+    }
+
+    /// Set the access token manually (in-memory only, does not write to auth.json).
+    pub fn set_access_token(&self, token: String) {
+        let account_id = extract_chatgpt_account_id(&token);
+        let mut inner = self.state.lock().unwrap();
+        inner.access_token = Some(token);
+        inner.account_id = account_id;
+        info!("[codex_auth] Access token set manually (in-memory only)");
     }
 
     pub fn logout(&self) {

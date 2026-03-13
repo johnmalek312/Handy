@@ -366,6 +366,7 @@ pub fn run(cli_args: CliArgs) {
         commands::cloud_stt::claude_logout,
         commands::cloud_stt::import_claude_code_credentials,
         commands::cloud_stt::get_codex_auth_state,
+        commands::cloud_stt::set_codex_access_token,
         commands::cloud_stt::import_codex_credentials,
         commands::cloud_stt::codex_logout,
         commands::cloud_stt::start_cloud_stt,

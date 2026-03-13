@@ -40,10 +40,23 @@ struct ClaudeCodeOAuth {
     access_token: Option<String>,
 }
 
+fn claude_config_dir() -> Option<PathBuf> {
+    // Match Claude Code: CLAUDE_CONFIG_DIR ?? os.homedir() + ".claude"
+    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    home_dir().map(|h| h.join(".claude"))
+}
+
 fn credentials_path() -> Option<PathBuf> {
+    claude_config_dir().map(|d| d.join(".credentials.json"))
+}
+
+/// Cross-platform home directory (HOME on Unix, USERPROFILE on Windows).
+fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(|h| PathBuf::from(h).join(".claude").join(".credentials.json"))
+        .map(PathBuf::from)
 }
 
 fn read_claude_code_token() -> Option<String> {

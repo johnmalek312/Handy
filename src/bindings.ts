@@ -752,6 +752,14 @@ async getCodexAuthState() : Promise<Result<CodexAuthState, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async setCodexAccessToken(token: string) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_codex_access_token", { token }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async importCodexCredentials() : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("import_codex_credentials") };
