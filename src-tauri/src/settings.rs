@@ -362,9 +362,12 @@ pub struct AppSettings {
     pub external_script_path: Option<String>,
     #[serde(default)]
     pub custom_filler_words: Option<Vec<String>>,
-    /// When true, use Claude.ai cloud STT instead of local models.
+    /// When true, use cloud STT instead of local models.
     #[serde(default)]
     pub cloud_stt_enabled: bool,
+    /// Which cloud STT provider to use.
+    #[serde(default)]
+    pub cloud_stt_provider: crate::cloud_stt::CloudSttProvider,
     /// Language for cloud STT (e.g. "en", "fr", "es").
     #[serde(default = "default_cloud_stt_language")]
     pub cloud_stt_language: String,
@@ -738,6 +741,7 @@ pub fn get_default_settings() -> AppSettings {
         external_script_path: None,
         custom_filler_words: None,
         cloud_stt_enabled: false,
+        cloud_stt_provider: crate::cloud_stt::CloudSttProvider::default(),
         cloud_stt_language: default_cloud_stt_language(),
     }
 }

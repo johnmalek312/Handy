@@ -5,30 +5,19 @@
 //!
 //! On 401/403, re-reads ~/.claude/.credentials.json and retries with backoff.
 
-use crate::claude_auth::ClaudeAuthManager;
+use super::claude_auth::ClaudeAuthManager;
+use super::{CloudSttStatusEvent, CloudTranscriptEvent};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, info, warn};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::mpsc;
+use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::Request;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::connect_async;
-
-#[derive(Clone, Debug, Serialize)]
-pub struct CloudTranscriptEvent {
-    pub text: String,
-    pub is_final: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct CloudSttStatusEvent {
-    pub status: String,
-    pub message: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct WsMessage {
@@ -117,9 +106,7 @@ impl CloudSttSession {
     /// Drop the audio channel (triggers CloseStream) and wait for the server
     /// to send the final transcript before returning it. Times out after 5s.
     pub async fn close_and_wait(&mut self) -> String {
-        // Drop audio sender — this causes the audio_sender task to send CloseStream
         self.audio_tx.take();
-        // Wait for the read loop to finish (server sends final transcript then closes)
         let _ = tokio::time::timeout(
             tokio::time::Duration::from_secs(5),
             self.done_notify.notified(),
@@ -148,15 +135,14 @@ fn build_ws_url(origin: &str, language: &str) -> String {
 }
 
 fn build_ws_request(ws_url: &str, token: &str) -> Result<Request<()>, String> {
-    // Use IntoClientRequest on the URL string so tungstenite adds all
-    // required WebSocket handshake headers (Host, Upgrade, Connection,
-    // Sec-WebSocket-Key, Sec-WebSocket-Version) automatically.
     let mut request = ws_url
         .into_client_request()
         .map_err(|e| format!("Failed to build WS request: {}", e))?;
     let headers = request.headers_mut();
-    headers.insert("Authorization", format!("Bearer {}", token).parse().unwrap());
-    // x-app and User-Agent headers are required to bypass Cloudflare challenge on claude.ai
+    headers.insert(
+        "Authorization",
+        format!("Bearer {}", token).parse().unwrap(),
+    );
     headers.insert("x-app", "cli".parse().unwrap());
     headers.insert(
         "User-Agent",
@@ -188,7 +174,11 @@ async fn connect_with_retry(
         }
 
         let request = build_ws_request(ws_url, &token)?;
-        info!("[cloud_stt] Attempt {} connecting to: {}", attempt + 1, ws_url);
+        info!(
+            "[cloud_stt] Attempt {} connecting to: {}",
+            attempt + 1,
+            ws_url
+        );
 
         match connect_async(request).await {
             Ok((stream, _)) => return Ok((stream, token)),
@@ -272,8 +262,16 @@ async fn run_stt_session(
         },
     );
 
-    run_stt_stream(app_handle, ws_stream, audio_rx, shutdown, is_connected, accumulated_transcript, done_notify)
-        .await;
+    run_stt_stream(
+        app_handle,
+        ws_stream,
+        audio_rx,
+        shutdown,
+        is_connected,
+        accumulated_transcript,
+        done_notify,
+    )
+    .await;
 }
 
 async fn run_stt_stream(
@@ -335,7 +333,7 @@ async fn run_stt_stream(
 
     // Read loop
     let mut last_interim = String::new();
-    let mut close_stream_sent = false;
+    let close_stream_sent = false;
 
     while let Some(msg_result) = ws_read.next().await {
         if shutdown.load(Ordering::Relaxed) && close_stream_sent {
@@ -462,6 +460,9 @@ async fn run_stt_stream(
     audio_sender.abort();
     ws_writer.abort();
 
-    info!("[cloud_stt] Session ended, final transcript: {}", accumulated_transcript.lock().unwrap());
+    info!(
+        "[cloud_stt] Session ended, final transcript: {}",
+        accumulated_transcript.lock().unwrap()
+    );
     done_notify.notify_waiters();
 }

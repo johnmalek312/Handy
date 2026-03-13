@@ -4,8 +4,7 @@ mod apple_intelligence;
 mod audio_feedback;
 pub mod audio_toolkit;
 pub mod cli;
-mod claude_auth;
-mod claude_stt;
+mod cloud_stt;
 mod clipboard;
 mod commands;
 mod helpers;
@@ -132,11 +131,13 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
 
-    // Initialize Claude.ai auth and cloud STT state
+    // Initialize cloud STT auth managers and session state
     let claude_auth_manager =
-        Arc::new(claude_auth::ClaudeAuthManager::new(app_handle));
+        Arc::new(cloud_stt::claude_auth::ClaudeAuthManager::new(app_handle));
     app_handle.manage(claude_auth_manager);
-    app_handle.manage(commands::claude::CloudSttSessionState(
+    let codex_auth_manager = Arc::new(cloud_stt::codex_auth::CodexAuthManager::new());
+    app_handle.manage(codex_auth_manager);
+    app_handle.manage(commands::cloud_stt::CloudSttSessionState(
         std::sync::Mutex::new(None),
     ));
 
@@ -360,16 +361,20 @@ pub fn run(cli_args: CliArgs) {
         commands::history::delete_history_entry,
         commands::history::update_history_limit,
         commands::history::update_recording_retention_period,
-        commands::claude::get_claude_auth_state,
-        commands::claude::set_claude_access_token,
-        commands::claude::claude_logout,
-        commands::claude::start_cloud_stt,
-        commands::claude::stop_cloud_stt,
-        commands::claude::send_cloud_stt_audio,
-        commands::claude::is_cloud_stt_connected,
-        commands::claude::change_cloud_stt_enabled,
-        commands::claude::change_cloud_stt_language,
-        commands::claude::import_claude_code_credentials,
+        commands::cloud_stt::get_claude_auth_state,
+        commands::cloud_stt::set_claude_access_token,
+        commands::cloud_stt::claude_logout,
+        commands::cloud_stt::import_claude_code_credentials,
+        commands::cloud_stt::get_codex_auth_state,
+        commands::cloud_stt::import_codex_credentials,
+        commands::cloud_stt::codex_logout,
+        commands::cloud_stt::start_cloud_stt,
+        commands::cloud_stt::stop_cloud_stt,
+        commands::cloud_stt::send_cloud_stt_audio,
+        commands::cloud_stt::is_cloud_stt_connected,
+        commands::cloud_stt::change_cloud_stt_enabled,
+        commands::cloud_stt::change_cloud_stt_provider,
+        commands::cloud_stt::change_cloud_stt_language,
         helpers::clamshell::is_laptop,
     ]);
 

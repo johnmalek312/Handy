@@ -137,6 +137,8 @@ const settingUpdaters: {
     commands.changeShowTrayIconSetting(value as boolean),
   cloud_stt_enabled: (value) =>
     commands.changeCloudSttEnabled(value as boolean),
+  cloud_stt_provider: (value) =>
+    commands.changeCloudSttProvider(value as any),
   cloud_stt_language: (value) =>
     commands.changeCloudSttLanguage(value as string),
 };

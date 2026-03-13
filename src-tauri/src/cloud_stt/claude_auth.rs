@@ -50,7 +50,10 @@ fn read_claude_code_token() -> Option<String> {
     let path = credentials_path()?;
     let contents = std::fs::read_to_string(&path).ok()?;
     let creds: ClaudeCodeCredentials = serde_json::from_str(&contents).ok()?;
-    creds.claude_ai_oauth?.access_token.filter(|s| !s.is_empty())
+    creds
+        .claude_ai_oauth?
+        .access_token
+        .filter(|s| !s.is_empty())
 }
 
 /// Manager for Claude.ai authentication state.
